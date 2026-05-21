@@ -2,7 +2,9 @@
 build/
 app/build/
 
+# Keep local SDK paths out of git
 local.properties
+
 *.iml
 .idea/
 
