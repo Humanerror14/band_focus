@@ -1,15 +1,4 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#3B82F6"
-        android:pathData="M18,54a36,36 0,1 0,72 0a36,36 0,1 0,-72 0" />
-    <path
-        android:fillColor="#06B6D4"
-        android:pathData="M34,54h40v8H34zM42,38h24v8H42zM42,70h24v8H42z" />
-    <path
-        android:fillColor="#A3E635"
-        android:pathData="M70,30l12,24l-12,24l-8,-4l10,-20l-10,-20z" />
-</vector>
+<?xml version="1.0" encoding="utf-8"?>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/bandfocus_logo"
+    android:inset="16dp" />

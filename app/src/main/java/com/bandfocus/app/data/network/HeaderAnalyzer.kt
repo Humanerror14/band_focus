@@ -1,13 +1,15 @@
 package com.bandfocus.app.data.network
 
-import android.net.Uri
+import com.bandfocus.app.core.security.DownloadSecurityPolicy
 import com.bandfocus.app.core.util.IoDispatcher
 import com.bandfocus.app.domain.model.DownloadMetadata
 import com.bandfocus.app.domain.model.DownloadMode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import javax.inject.Inject
 
 class HeaderAnalyzer @Inject constructor(
@@ -16,28 +18,47 @@ class HeaderAnalyzer @Inject constructor(
 ) {
     suspend fun analyze(url: String): Result<DownloadMetadata> = withContext(ioDispatcher) {
         runCatching {
-            require(isValidHttpUrl(url)) { "URL must start with http:// or https://" }
-
-            val headRequest = Request.Builder().url(url).head().build()
-            val response = client.newCall(headRequest).execute().use { headResponse ->
-                if (headResponse.isSuccessful) headResponse else fallbackGet(url)
+            val normalizedUrl = url.trim()
+            require(DownloadSecurityPolicy.isSecureDownloadUrl(normalizedUrl)) {
+                "URL must start with https:// for secure downloads"
             }
 
-            response.use { res ->
-                val fileSize = res.header("Content-Length")?.toLongOrNull()
-                val contentType = res.header("Content-Type")
-                val fileName = filenameFromHeaders(url, res.header("Content-Disposition"))
-                val supportsRange = res.header("Accept-Ranges")?.equals("bytes", ignoreCase = true) == true
-                val recommendedMode = recommendMode(fileSize, supportsRange)
-                DownloadMetadata(
-                    url = url,
-                    fileName = fileName,
-                    fileSize = fileSize,
-                    mimeType = contentType,
-                    supportsRange = supportsRange,
-                    recommendedMode = recommendedMode,
-                    diagnosis = diagnosis(fileSize, supportsRange, recommendedMode)
-                )
+            val headRequest = Request.Builder().url(normalizedUrl).head().build()
+            client.newCall(headRequest).execute().use { headResponse ->
+                val rangeProbe = if (headResponse.isSuccessful && !supportsRange(headResponse)) {
+                    fallbackGet(normalizedUrl)
+                } else {
+                    null
+                }
+                val response = when {
+                    rangeProbe?.isSuccessful == true -> rangeProbe
+                    headResponse.isSuccessful -> headResponse
+                    else -> fallbackGet(url)
+                }
+                val shouldCloseResponse = response !== headResponse && response !== rangeProbe
+                try {
+                    val fileSize = contentLength(response) ?: contentLength(headResponse)
+                    val contentType = response.header("Content-Type") ?: headResponse.header("Content-Type")
+                    val fileName = filenameFromHeaders(
+                        url = normalizedUrl,
+                        contentDisposition = response.header("Content-Disposition")
+                            ?: headResponse.header("Content-Disposition")
+                    )
+                    val supportsRange = supportsRange(response) || supportsRange(headResponse)
+                    val recommendedMode = recommendMode(fileSize, supportsRange)
+                    DownloadMetadata(
+                        url = normalizedUrl,
+                        fileName = fileName,
+                        fileSize = fileSize,
+                        mimeType = contentType,
+                        supportsRange = supportsRange,
+                        recommendedMode = recommendedMode,
+                        diagnosis = diagnosis(fileSize, supportsRange, recommendedMode)
+                    )
+                } finally {
+                    if (shouldCloseResponse) response.close()
+                    rangeProbe?.close()
+                }
             }
         }
     }
@@ -50,10 +71,17 @@ class HeaderAnalyzer @Inject constructor(
             .build()
     ).execute()
 
-    private fun isValidHttpUrl(url: String): Boolean {
-        val uri = Uri.parse(url)
-        return uri.scheme == "http" || uri.scheme == "https"
+    private fun contentLength(response: Response): Long? {
+        response.header("Content-Range")
+            ?.substringAfter("/")
+            ?.toLongOrNull()
+            ?.let { return it }
+        return response.header("Content-Length")?.toLongOrNull()
     }
+
+    private fun supportsRange(response: Response): Boolean =
+        response.code == 206 ||
+            response.header("Accept-Ranges")?.equals("bytes", ignoreCase = true) == true
 
     private fun filenameFromHeaders(url: String, contentDisposition: String?): String {
         val headerName = contentDisposition
@@ -62,7 +90,11 @@ class HeaderAnalyzer @Inject constructor(
             ?.firstOrNull { it.startsWith("filename=", ignoreCase = true) }
             ?.substringAfter("=")
             ?.trim('"')
-        return headerName ?: Uri.parse(url).lastPathSegment?.takeIf { it.isNotBlank() } ?: "download.bin"
+        val pathName = url.toHttpUrlOrNull()
+            ?.pathSegments
+            ?.lastOrNull()
+            ?.takeIf { it.isNotBlank() }
+        return DownloadSecurityPolicy.sanitizeFileName(headerName ?: pathName ?: "download.bin")
     }
 
     private fun recommendMode(fileSize: Long?, supportsRange: Boolean): DownloadMode {
