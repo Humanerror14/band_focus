@@ -11,6 +11,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -20,17 +21,21 @@ class DownloadsViewModel @Inject constructor(
     private val repository: DownloadRepository,
     private val downloadEngine: DownloadEngine
 ) : ViewModel() {
+    private val errorMessage = MutableStateFlow<String?>(null)
+
     val uiState: StateFlow<DownloadsUiState> = combine(
         repository.observeAll(),
-        downloadEngine.activeDownloads
-    ) { downloads, activeProgress ->
+        downloadEngine.activeDownloads,
+        errorMessage
+    ) { downloads, activeProgress, error ->
         DownloadsUiState(
             downloads = downloads.map { task ->
                 DownloadHistoryItem(
                     task = task,
                     progress = activeProgress[task.id]
                 )
-            }
+            },
+            errorMessage = error
         )
     }.stateIn(
         scope = viewModelScope,
@@ -50,6 +55,16 @@ class DownloadsViewModel @Inject constructor(
         }
     }
 
+    fun resumeDownload(id: String) {
+        viewModelScope.launch {
+            errorMessage.value = null
+            downloadEngine.resumeDownload(id)
+                .onFailure { throwable ->
+                    errorMessage.value = throwable.message ?: "Failed to resume download"
+                }
+        }
+    }
+
     fun cancelDownload(id: String) {
         viewModelScope.launch {
             downloadEngine.cancelDownload(id)
@@ -58,7 +73,8 @@ class DownloadsViewModel @Inject constructor(
 }
 
 data class DownloadsUiState(
-    val downloads: List<DownloadHistoryItem> = emptyList()
+    val downloads: List<DownloadHistoryItem> = emptyList(),
+    val errorMessage: String? = null
 )
 
 data class DownloadHistoryItem(

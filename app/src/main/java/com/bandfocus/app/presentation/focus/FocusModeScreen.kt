@@ -4,23 +4,27 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.util.LruCache
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
@@ -34,8 +38,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,14 +58,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.core.graphics.drawable.toBitmap
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.bandfocus.app.service.FocusVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
 
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FocusModeScreen(viewModel: FocusViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsState()
@@ -78,6 +79,16 @@ fun FocusModeScreen(viewModel: FocusViewModel = hiltViewModel()) {
     val blockedApps = remember(uiState.apps) {
         uiState.apps.filter { it.isBlocked }
     }
+    val filteredApps = remember(search, selectedFilter, uiState.apps) {
+        uiState.apps.filter { item ->
+            val matchesSearch = search.isBlank() ||
+                item.appName.contains(search, ignoreCase = true) ||
+                item.packageName.contains(search, ignoreCase = true) ||
+                item.accessLabel().contains(search, ignoreCase = true)
+            matchesSearch && selectedFilter.matches(item)
+        }
+    }
+
     LaunchedEffect(focusEnabled, blockedPackages) {
         if (focusEnabled) context.startFocusVpn(blockedPackages)
     }
@@ -90,135 +101,146 @@ fun FocusModeScreen(viewModel: FocusViewModel = hiltViewModel()) {
             context.startFocusVpn(blockedPackages)
         }
     }
-    val filteredApps = remember(search, selectedFilter, uiState.apps) {
-        uiState.apps.filter { item ->
-            val matchesSearch = search.isBlank() ||
-                item.appName.contains(search, ignoreCase = true) ||
-                item.packageName.contains(search, ignoreCase = true) ||
-                item.accessLabel().contains(search, ignoreCase = true)
-            matchesSearch && selectedFilter.matches(item)
+    val onFocusToggle: (Boolean) -> Unit = { enabled ->
+        if (enabled) {
+            val permissionIntent = VpnService.prepare(context)
+            if (permissionIntent != null) {
+                vpnGranted = false
+                vpnPermissionLauncher.launch(permissionIntent)
+            } else {
+                vpnGranted = true
+                focusEnabled = true
+                context.startFocusVpn(blockedPackages)
+            }
+        } else {
+            focusEnabled = false
+            context.stopFocusVpn()
+        }
+    }
+    val onGrantVpnClick = {
+        val permissionIntent = VpnService.prepare(context)
+        if (permissionIntent != null) {
+            vpnPermissionLauncher.launch(permissionIntent)
+        } else {
+            vpnGranted = true
         }
     }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
         val twoColumns = maxWidth >= 840.dp
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("Focus Mode", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        val appRows = remember(filteredApps, twoColumns) {
+            if (twoColumns) filteredApps.chunked(2) else filteredApps.map { listOf(it) }
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item {
+                Text("Focus Mode", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            }
             if (twoColumns) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                        FocusSummary(
+                            checked = focusEnabled,
+                            blockedCount = blockedPackages.size,
+                            onCheckedChange = onFocusToggle,
+                            modifier = Modifier.weight(1f)
+                        )
+                        VpnStatus(
+                            granted = vpnGranted,
+                            onGrantClick = onGrantVpnClick,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            } else {
+                item {
                     FocusSummary(
                         checked = focusEnabled,
                         blockedCount = blockedPackages.size,
-                        onCheckedChange = { enabled ->
-                            if (enabled) {
-                                val permissionIntent = VpnService.prepare(context)
-                                if (permissionIntent != null) {
-                                    vpnGranted = false
-                                    vpnPermissionLauncher.launch(permissionIntent)
-                                } else {
-                                    vpnGranted = true
-                                    focusEnabled = true
-                                    context.startFocusVpn(blockedPackages)
-                                }
-                            } else {
-                                focusEnabled = false
-                                context.stopFocusVpn()
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
+                        onCheckedChange = onFocusToggle
                     )
+                }
+                item {
                     VpnStatus(
                         granted = vpnGranted,
-                        onGrantClick = {
-                            val permissionIntent = VpnService.prepare(context)
-                            if (permissionIntent != null) {
-                                vpnPermissionLauncher.launch(permissionIntent)
-                            } else {
-                                vpnGranted = true
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            } else {
-                FocusSummary(
-                    checked = focusEnabled,
-                    blockedCount = blockedPackages.size,
-                    onCheckedChange = { enabled ->
-                        if (enabled) {
-                            val permissionIntent = VpnService.prepare(context)
-                            if (permissionIntent != null) {
-                                vpnGranted = false
-                                vpnPermissionLauncher.launch(permissionIntent)
-                            } else {
-                                vpnGranted = true
-                                focusEnabled = true
-                                context.startFocusVpn(blockedPackages)
-                            }
-                        } else {
-                            focusEnabled = false
-                            context.stopFocusVpn()
-                        }
-                    }
-                )
-                VpnStatus(
-                    granted = vpnGranted,
-                    onGrantClick = {
-                        val permissionIntent = VpnService.prepare(context)
-                        if (permissionIntent != null) {
-                            vpnPermissionLauncher.launch(permissionIntent)
-                        } else {
-                            vpnGranted = true
-                        }
-                    }
-                )
-            }
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                label = { Text("Search apps, package, or blocked") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            BlockedInternetCard(
-                blockedApps = blockedApps,
-                focusEnabled = focusEnabled
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FocusFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = selectedFilter == filter,
-                        onClick = { selectedFilter = filter },
-                        label = { Text("${filter.label} (${filter.count(uiState.apps)})", maxLines = 1) }
+                        onGrantClick = onGrantVpnClick
                     )
                 }
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FocusPreset.entries.forEach { preset ->
-                    FilterChip(
-                        selected = false,
-                        onClick = { viewModel.applyPreset(preset) },
-                        label = { Text(preset.label, maxLines = 1) }
+            item {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    label = { Text("Search apps, package, or blocked") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+            if (blockedApps.isNotEmpty()) {
+                item {
+                    BlockedInternetCard(
+                        blockedApps = blockedApps,
+                        focusEnabled = focusEnabled
                     )
+                }
+            }
+            item {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FocusFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = selectedFilter == filter,
+                            onClick = { selectedFilter = filter },
+                            label = { Text("${filter.label} (${filter.count(uiState.apps)})", maxLines = 1) }
+                        )
+                    }
+                }
+            }
+            item {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FocusPreset.entries.forEach { preset ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { viewModel.applyPreset(preset) },
+                            label = { Text(preset.label, maxLines = 1) }
+                        )
+                    }
                 }
             }
             if (filteredApps.isEmpty()) {
-                EmptyFocusSearchState(selectedFilter)
+                item { EmptyFocusSearchState(selectedFilter) }
             } else {
-                filteredApps.forEach { item ->
-                    AppRuleRow(
-                        item = item,
-                        checked = item.isBlocked,
-                        onCheckedChange = { checked ->
-                            viewModel.setBlocked(item, checked)
+                items(
+                    items = appRows,
+                    key = { row -> row.joinToString(separator = "|") { it.packageName } }
+                ) { row ->
+                    if (twoColumns) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                            row.forEach { item ->
+                                AppRuleRow(
+                                    item = item,
+                                    checked = item.isBlocked,
+                                    onCheckedChange = { checked -> viewModel.setBlocked(item, checked) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (row.size == 1) Box(Modifier.weight(1f))
                         }
-                    )
+                    } else {
+                        val item = row.first()
+                        AppRuleRow(
+                            item = item,
+                            checked = item.isBlocked,
+                            onCheckedChange = { checked -> viewModel.setBlocked(item, checked) }
+                        )
+                    }
                 }
             }
         }
@@ -232,48 +254,83 @@ private fun BlockedInternetCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (blockedApps.isEmpty()) {
-                MaterialTheme.colorScheme.surface
-            } else {
-                Color(0xFFFFF7ED)
-            }
-        )
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Blocked internet access", fontWeight = FontWeight.SemiBold)
-            Text(
-                if (blockedApps.isEmpty()) {
-                    "No apps are currently blocked."
-                } else if (focusEnabled) {
-                    "${blockedApps.size} apps are blocked through the local VPN."
-                } else {
-                    "${blockedApps.size} apps are marked blocked. Turn on Focus Mode to enforce it."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            blockedApps.take(4).forEach { app ->
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (focusEnabled) Color(0xFFDCFCE7) else Color(0xFFFFF7ED)),
+                contentAlignment = Alignment.Center
+            ) {
                 Text(
-                    "${app.appName} • ${app.packageName}",
+                    blockedApps.size.coerceAtMost(99).toString(),
+                    color = if (focusEnabled) Color(0xFF166534) else Color(0xFF9A3412),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    if (focusEnabled) "Blocking active" else "Blocked list ready",
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Text(
+                    blockedApps.take(3).joinToString { it.appName } +
+                        if (blockedApps.size > 3) " +${blockedApps.size - 3} more" else "",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (blockedApps.size > 4) {
-                Text(
-                    "+${blockedApps.size - 4} more blocked apps",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                blockedApps.take(3).forEach { app ->
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                    ) {
+                        MiniAppBadge(app.appName, app.packageName)
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun MiniAppBadge(appName: String, packageName: String) {
+    val modifier = Modifier.size(32.dp)
+    val systemIcon = rememberInstalledAppIcon(listOf(packageName), iconSizeDp = 32)
+    if (systemIcon != null) {
+        Image(
+            bitmap = systemIcon,
+            contentDescription = null,
+            modifier = modifier.clip(CircleShape)
+        )
+        return
+    }
+
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            appName.take(1).uppercase(),
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -333,10 +390,11 @@ private fun VpnStatus(
 private fun AppRuleRow(
     item: FocusAppItem,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -423,13 +481,16 @@ private fun AppBrandIcon(appName: String, packageName: String) {
 }
 
 @Composable
-private fun rememberInstalledAppIcon(packageNames: List<String>): ImageBitmap? {
+private fun rememberInstalledAppIcon(
+    packageNames: List<String>,
+    iconSizeDp: Int = 40
+): ImageBitmap? {
     val context = LocalContext.current.applicationContext
-    val iconSize = with(LocalDensity.current) { 40.dp.roundToPx() }
+    val iconSize = with(LocalDensity.current) { iconSizeDp.dp.roundToPx() }
     val cacheKey = remember(packageNames, iconSize) { "${packageNames.joinToString()}@$iconSize" }
 
     val icon by produceState<ImageBitmap?>(
-        initialValue = AppIconCache.icons[cacheKey],
+        initialValue = AppIconCache.get(cacheKey),
         key1 = cacheKey
     ) {
         if (value != null) return@produceState
@@ -441,14 +502,23 @@ private fun rememberInstalledAppIcon(packageNames: List<String>): ImageBitmap? {
                         .toBitmap(width = iconSize, height = iconSize)
                         .asImageBitmap()
                 }.getOrNull()
-            }?.also { AppIconCache.icons[cacheKey] = it }
+            }?.also { AppIconCache.put(cacheKey, it) }
         }
     }
     return icon
 }
 
 private object AppIconCache {
-    val icons = ConcurrentHashMap<String, ImageBitmap>()
+    private const val MAX_ICON_COUNT = 128
+    private val icons = LruCache<String, ImageBitmap>(MAX_ICON_COUNT)
+
+    @Synchronized
+    fun get(key: String): ImageBitmap? = icons.get(key)
+
+    @Synchronized
+    fun put(key: String, icon: ImageBitmap) {
+        icons.put(key, icon)
+    }
 }
 
 private fun Context.startFocusVpn(blockedPackages: List<String>) {

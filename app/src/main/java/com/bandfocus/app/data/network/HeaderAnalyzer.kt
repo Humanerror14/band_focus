@@ -33,7 +33,7 @@ class HeaderAnalyzer @Inject constructor(
                 val response = when {
                     rangeProbe?.isSuccessful == true -> rangeProbe
                     headResponse.isSuccessful -> headResponse
-                    else -> fallbackGet(url)
+                    else -> fallbackGet(normalizedUrl)
                 }
                 val shouldCloseResponse = response !== headResponse && response !== rangeProbe
                 try {

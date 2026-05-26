@@ -86,6 +86,15 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = hiltViewModel()) {
                     }
                 }
             }
+            uiState.errorMessage?.let { message ->
+                item {
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
 
             if (visibleDownloads.isEmpty()) {
                 item { EmptyDownloadsState(selectedFilter) }
@@ -96,6 +105,7 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = hiltViewModel()) {
                         row.forEach { item ->
                             DownloadItem(
                                 item = item,
+                                onResume = { viewModel.resumeDownload(item.task.id) },
                                 onPause = { viewModel.pauseDownload(item.task.id) },
                                 onCancel = { viewModel.cancelDownload(item.task.id) },
                                 onDelete = { viewModel.deleteDownload(item.task.id) },
@@ -109,6 +119,7 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = hiltViewModel()) {
                 items(visibleDownloads, key = { it.task.id }) { item ->
                     DownloadItem(
                         item = item,
+                        onResume = { viewModel.resumeDownload(item.task.id) },
                         onPause = { viewModel.pauseDownload(item.task.id) },
                         onCancel = { viewModel.cancelDownload(item.task.id) },
                         onDelete = { viewModel.deleteDownload(item.task.id) }
@@ -122,6 +133,7 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = hiltViewModel()) {
 @Composable
 private fun DownloadItem(
     item: DownloadHistoryItem,
+    onResume: () -> Unit,
     onPause: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit,
@@ -182,16 +194,29 @@ private fun DownloadItem(
                 }
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (item.status == DownloadStatus.DOWNLOADING) {
-                    IconButton(onClick = onPause) {
-                        Icon(Icons.Default.Pause, contentDescription = "Pause download")
+                when (item.status) {
+                    DownloadStatus.DOWNLOADING -> {
+                        IconButton(onClick = onPause) {
+                            Icon(Icons.Default.Pause, contentDescription = "Pause download")
+                        }
+                        IconButton(onClick = onCancel) {
+                            Icon(Icons.Default.Cancel, contentDescription = "Cancel download")
+                        }
                     }
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.Default.Cancel, contentDescription = "Cancel download")
+
+                    DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.CANCELED -> {
+                        IconButton(onClick = onResume) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Resume download")
+                        }
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete download")
+                        }
                     }
-                } else {
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete download")
+
+                    else -> {
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete download")
+                        }
                     }
                 }
             }

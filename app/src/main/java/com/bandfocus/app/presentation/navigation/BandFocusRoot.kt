@@ -1,8 +1,13 @@
 package com.bandfocus.app.presentation.navigation
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -32,13 +37,16 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -52,6 +60,7 @@ import com.bandfocus.app.presentation.focus.FocusModeScreen
 import com.bandfocus.app.presentation.home.HomeScreen
 import com.bandfocus.app.presentation.insights.InsightsScreen
 import com.bandfocus.app.presentation.settings.SettingsScreen
+import kotlinx.coroutines.launch
 
 private enum class TopLevelDestination(
     val route: String,
@@ -102,7 +111,9 @@ fun BandFocusRoot() {
                         val selected = selectedDestination == destination
                         NavigationRailItem(
                             selected = selected,
-                            onClick = { selectedDestination = destination },
+                            onClick = {
+                                if (selectedDestination != destination) selectedDestination = destination
+                            },
                             icon = { Icon(destination.icon, contentDescription = destination.label) },
                             label = { Text(destination.label) },
                             colors = NavigationRailItemDefaults.colors(
@@ -138,7 +149,9 @@ fun BandFocusRoot() {
                             val selected = selectedDestination == destination
                             NavigationBarItem(
                                 selected = selected,
-                                onClick = { selectedDestination = destination },
+                                onClick = {
+                                    if (selectedDestination != destination) selectedDestination = destination
+                                },
                                 icon = {
                                     Icon(
                                         destination.icon,
@@ -183,7 +196,35 @@ private fun BandFocusDestinationContent(
     stateHolder: androidx.compose.runtime.saveable.SaveableStateHolder,
     modifier: Modifier = Modifier
 ) {
-    androidx.compose.foundation.layout.Box(modifier) {
+    val alpha = remember { Animatable(1f) }
+    val offsetY = remember { Animatable(0f) }
+
+    LaunchedEffect(destination) {
+        alpha.snapTo(0.72f)
+        offsetY.snapTo(24f)
+        launch {
+            alpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 160)
+            )
+        }
+        launch {
+            offsetY.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = 0.9f,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
+        }
+    }
+
+    Box(
+        modifier.graphicsLayer {
+            this.alpha = alpha.value
+            translationY = offsetY.value
+        }
+    ) {
         stateHolder.SaveableStateProvider(destination.route) {
             when (destination) {
                 TopLevelDestination.Home -> HomeScreen()
